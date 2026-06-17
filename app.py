@@ -38,9 +38,16 @@ def get_month_string():
     return date.today().strftime("%Y-%m")
 
 
+def to_int(value):
+    try:
+        return int(float(value))
+    except Exception:
+        return 0
+
+
 def format_money(value):
     try:
-        return f"＄{float(value):,.0f}"
+        return f"＄{to_int(value):,}"
     except Exception:
         return "＄0"
 
@@ -118,6 +125,17 @@ def init_db():
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS saving_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            save_date TEXT NOT NULL,
+            save_name TEXT NOT NULL,
+            amount REAL NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -186,14 +204,48 @@ def get_goal():
         return None
     return df.iloc[0].to_dict()
 
+def get_saving_records():
+    return fetch_df(
+        """
+        SELECT id, save_date, save_name, amount, created_at
+        FROM saving_records
+        ORDER BY save_date DESC, id DESC
+        """
+    )
+
+
 
 def apply_style():
     st.markdown(
         """
         <style>
-        .block-container { padding-top: 2rem; padding-bottom: 3rem; }
-        h1 { font-size: 44px !important; font-weight: 800 !important; color: #1f2937 !important; }
-        h2, h3 { color: #1f2937 !important; font-weight: 700 !important; }
+        section[data-testid="stSidebar"] {
+            height: 100vh;
+            overflow-y: auto;
+        }
+
+        section[data-testid="stSidebar"] > div:first-child {
+            height: 100vh;
+            overflow-y: auto;
+            padding-bottom: 40px;
+        }
+
+        .block-container {
+            padding-top: 2rem;
+            padding-bottom: 3rem;
+        }
+
+        h1 {
+            font-size: 44px !important;
+            font-weight: 800 !important;
+            color: #1f2937 !important;
+        }
+
+        h2, h3 {
+            color: #1f2937 !important;
+            font-weight: 700 !important;
+        }
+
         .money-card {
             background: white;
             border: 1px solid #e5e7eb;
@@ -203,38 +255,10 @@ def apply_style():
             min-height: 120px;
             margin-bottom: 12px;
         }
-        .money-title {
-            font-size: 18px;
-            font-weight: 600;
-            color: #111827;
-            margin-bottom: 16px;
-        }
-        .money-value {
-            font-size: 36px;
-            font-weight: 700;
-            color: #1f2937;
-            white-space: nowrap;
-        }
-        .quick-card {
-            background: #f8fafc;
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            padding: 16px 18px;
-            margin-bottom: 10px;
-            font-size: 16px;
-            color: #1f2937;
-        }
-        .small-title {
-            font-size: 24px;
-            font-weight: 700;
-            color: #1f2937;
-            margin: 8px 0 16px 0;
-        }
         </style>
         """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
-
 
 def add_transaction_box():
     st.markdown("<div class='small-title'>新增一筆收支</div>", unsafe_allow_html=True)
@@ -438,48 +462,181 @@ def analysis_charts(trans_df):
 
 def saving_goal_page():
     goal = get_goal()
+
     with st.form("saving_goal_form"):
-        goal_name = st.text_input("目標名稱", value="" if goal is None else goal.get("goal_name", ""))
-        target_amount = st.number_input("目標金額", min_value=0.0, step=1000.0, value=0.0 if goal is None else float(goal.get("target_amount", 0) or 0))
-        current_amount = st.number_input("目前已存", min_value=0.0, step=1000.0, value=0.0 if goal is None else float(goal.get("current_amount", 0) or 0))
-        deadline_value = date.today() if goal is None or not goal.get("deadline") else datetime.strptime(goal.get("deadline"), "%Y-%m-%d").date()
+        goal_name = st.text_input(
+            "目標名稱",
+            value="" if goal is None else goal.get("goal_name", "")
+        )
+
+        target_amount = st.number_input(
+            "目標金額",
+            min_value=0,
+            step=1,
+            value=0 if goal is None else to_int(goal.get("target_amount", 0)),
+            format="%d"
+        )
+
+        current_amount = st.number_input(
+            "目前已存",
+            min_value=0,
+            step=1,
+            value=0 if goal is None else to_int(goal.get("current_amount", 0)),
+            format="%d"
+        )
+
+        deadline_value = (
+            date.today()
+            if goal is None or not goal.get("deadline")
+            else datetime.strptime(goal.get("deadline"), "%Y-%m-%d").date()
+        )
+
         deadline = st.date_input("完成期限", value=deadline_value)
+
         submitted = st.form_submit_button("儲存儲蓄目標", use_container_width=True)
+
         if submitted:
             execute_sql(
-                "INSERT OR REPLACE INTO saving_goal (id, goal_name, target_amount, current_amount, deadline) VALUES (1, ?, ?, ?, ?)",
-                (goal_name, target_amount, current_amount, deadline.strftime("%Y-%m-%d")),
+                """
+                INSERT OR REPLACE INTO saving_goal
+                (id, goal_name, target_amount, current_amount, deadline)
+                VALUES (1, ?, ?, ?, ?)
+                """,
+                (
+                    goal_name,
+                    target_amount,
+                    current_amount,
+                    deadline.strftime("%Y-%m-%d")
+                )
             )
             st.success("儲蓄目標已儲存")
             st.rerun()
+
     goal = get_goal()
+
     if goal is not None and float(goal.get("target_amount", 0) or 0) > 0:
         target = float(goal.get("target_amount", 0) or 0)
         current = float(goal.get("current_amount", 0) or 0)
         remaining = max(target - current, 0)
+
         progress = min(current / target, 1.0)
+
         deadline_date = datetime.strptime(goal.get("deadline"), "%Y-%m-%d").date()
-        months_left = max((deadline_date.year - date.today().year) * 12 + deadline_date.month - date.today().month, 1)
+        months_left = max(
+            (deadline_date.year - date.today().year) * 12
+            + deadline_date.month
+            - date.today().month,
+            1
+        )
+
         monthly_need = remaining / months_left
+
         st.divider()
         st.markdown("<div class='small-title'>儲蓄進度</div>", unsafe_allow_html=True)
+
         col1, col2, col3 = st.columns(3)
+
         with col1:
             money_card("目標金額", target)
+
         with col2:
             money_card("目前已存", current)
+
         with col3:
             money_card("每月應存", monthly_need)
+
         st.progress(progress)
         st.write(f"目前進度：{progress * 100:.1f}%")
         st.write(f"剩餘金額：{format_money(remaining)}")
 
+    st.divider()
+    st.markdown("<div class='small-title'>新增存錢紀錄</div>", unsafe_allow_html=True)
+
+    with st.form("add_saving_record_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            save_date = st.date_input("存錢日期", value=date.today())
+            save_name = st.text_input("存錢名稱", placeholder="例如：打工薪水、零用錢、獎金")
+
+        with col2:
+            save_amount = st.number_input(
+                "存錢金額",
+                min_value=0,
+                step=1,
+                format="%d"
+            )
+
+        add_record = st.form_submit_button("新增存錢紀錄", use_container_width=True)
+
+        if add_record:
+            if save_amount <= 0:
+                st.warning("存錢金額要大於 0")
+            elif save_name.strip() == "":
+                st.warning("請輸入存錢名稱")
+            else:
+                execute_sql(
+                    """
+                    INSERT INTO saving_records
+                    (save_date, save_name, amount, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        save_date.strftime("%Y-%m-%d"),
+                        save_name,
+                        save_amount,
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    )
+                )
+
+                old_current = 0 if goal is None else float(goal.get("current_amount", 0) or 0)
+                new_current = old_current + save_amount
+
+                execute_sql(
+                    """
+                    INSERT OR REPLACE INTO saving_goal
+                    (id, goal_name, target_amount, current_amount, deadline)
+                    VALUES (1, ?, ?, ?, ?)
+                    """,
+                    (
+                        "" if goal is None else goal.get("goal_name", ""),
+                        0 if goal is None else float(goal.get("target_amount", 0) or 0),
+                        new_current,
+                        date.today().strftime("%Y-%m-%d") if goal is None or not goal.get("deadline") else goal.get("deadline")
+                    )
+                )
+
+                st.success("存錢紀錄已新增，並已更新目前已存金額")
+                st.rerun()
+
+    st.divider()
+    st.markdown("<div class='small-title'>存錢紀錄列表</div>", unsafe_allow_html=True)
+
+    records_df = get_saving_records()
+
+    if records_df.empty:
+        st.info("目前還沒有存錢紀錄。")
+    else:
+        show_df = records_df.copy()
+        show_df["amount"] = show_df["amount"].apply(format_money)
+
+        show_df = show_df.rename(
+            columns={
+                "id": "編號",
+                "save_date": "存錢日期",
+                "save_name": "名稱",
+                "amount": "金額",
+                "created_at": "建立時間"
+            }
+        )
+
+        st.dataframe(show_df, use_container_width=True, hide_index=True)
 
 def profile_page():
     profile = get_profile()
     with st.form("profile_form"):
         name = st.text_input("姓名", value="" if profile is None else profile.get("name", ""))
-        monthly_income = st.number_input("每月收入", min_value=0.0, step=1000.0, value=0.0 if profile is None else float(profile.get("monthly_income", 0) or 0))
+        monthly_income = st.number_input("每月收入", min_value=0, step=1, value=0 if profile is None else to_int(profile.get("monthly_income", 0)))
         finance_goal = st.text_area("理財目標", value="" if profile is None else profile.get("finance_goal", ""))
         emergency_months = st.number_input("緊急預備金月數", min_value=1, max_value=12, value=3 if profile is None else int(profile.get("emergency_months", 3) or 3))
         submitted = st.form_submit_button("儲存使用者資料", use_container_width=True)
@@ -561,35 +718,97 @@ def generate_ai_suggestions(selected_month, trans_df, budget_df, profile, goal):
 
 def build_excel_report(selected_month, trans_df, budget_df, goal):
     output = BytesIO()
+
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        # 每月收支表
         if trans_df.empty:
-            pd.DataFrame(columns=["日期", "類型", "分類", "金額", "備註"]).to_excel(writer, sheet_name="每月收支表", index=False)
+            pd.DataFrame(columns=["日期", "類型", "分類", "金額", "備註"]).to_excel(
+                writer,
+                sheet_name="每月收支表",
+                index=False
+            )
         else:
             report_df = trans_df[["t_date", "t_type", "category", "amount", "note"]].copy()
-            report_df = report_df.rename(columns={"t_date": "日期", "t_type": "類型", "category": "分類", "amount": "金額", "note": "備註"})
+            report_df = report_df.rename(
+                columns={
+                    "t_date": "日期",
+                    "t_type": "類型",
+                    "category": "分類",
+                    "amount": "金額",
+                    "note": "備註"
+                }
+            )
             report_df.to_excel(writer, sheet_name="每月收支表", index=False)
+
+        # 支出分類表
         expense_df = trans_df[trans_df["t_type"] == "支出"] if not trans_df.empty else pd.DataFrame()
+
         if not expense_df.empty:
-            category_report = expense_df.groupby("category", as_index=False)["amount"].sum().rename(columns={"category": "分類", "amount": "支出金額"})
+            category_report = (
+                expense_df.groupby("category", as_index=False)["amount"]
+                .sum()
+                .rename(columns={"category": "分類", "amount": "支出金額"})
+            )
         else:
             category_report = pd.DataFrame(columns=["分類", "支出金額"])
+
         category_report.to_excel(writer, sheet_name="支出分類表", index=False)
-        budget_df.rename(columns={"category": "分類", "amount": "預算金額"}).to_excel(writer, sheet_name="預算設定", index=False)
+
+        # 預算設定
+        budget_export = budget_df.rename(
+            columns={
+                "category": "分類",
+                "amount": "預算金額"
+            }
+        )
+        budget_export.to_excel(writer, sheet_name="預算設定", index=False)
+
+        # 儲蓄進度表
         if goal is not None:
-            goal_df = pd.DataFrame([{"目標名稱": goal.get("goal_name", ""), "目標金額": goal.get("target_amount", 0), "目前已存": goal.get("current_amount", 0), "完成期限": goal.get("deadline", "")}])
+            goal_df = pd.DataFrame(
+                [
+                    {
+                        "目標名稱": goal.get("goal_name", ""),
+                        "目標金額": goal.get("target_amount", 0),
+                        "目前已存": goal.get("current_amount", 0),
+                        "完成期限": goal.get("deadline", "")
+                    }
+                ]
+            )
         else:
             goal_df = pd.DataFrame(columns=["目標名稱", "目標金額", "目前已存", "完成期限"])
+
         goal_df.to_excel(writer, sheet_name="儲蓄進度表", index=False)
+
+        # 存錢紀錄表
+        saving_records_df = get_saving_records()
+
+        if saving_records_df.empty:
+            saving_export = pd.DataFrame(
+                columns=["存錢日期", "名稱", "金額", "建立時間"]
+            )
+        else:
+            saving_export = saving_records_df[["save_date", "save_name", "amount", "created_at"]].copy()
+            saving_export = saving_export.rename(
+                columns={
+                    "save_date": "存錢日期",
+                    "save_name": "名稱",
+                    "amount": "金額",
+                    "created_at": "建立時間"
+                }
+            )
+
+        saving_export.to_excel(writer, sheet_name="存錢紀錄表", index=False)
+
     output.seek(0)
     return output
-
 
 def main():
     st.set_page_config(page_title="AI 理財管家", page_icon="💰", layout="wide")
     init_db()
     apply_style()
 
-    st.sidebar.title("💰 AI 理財管家")
+    st.sidebar.title("理財管家")
 
     pages = [
         "快速記帳",
@@ -669,12 +888,36 @@ def main():
         st.markdown("# 財務報表")
         st.caption("下載目前月份的 Excel 財務報表。")
 
+        st.markdown("<div class='small-title'>存錢紀錄</div>", unsafe_allow_html=True)
+
+        saving_records_df = get_saving_records()
+
+        if saving_records_df.empty:
+            st.info("目前還沒有存錢紀錄。")
+        else:
+            show_saving_df = saving_records_df.copy()
+            show_saving_df["amount"] = show_saving_df["amount"].apply(format_money)
+
+            show_saving_df = show_saving_df.rename(
+                columns={
+                    "id": "編號",
+                    "save_date": "存錢日期",
+                    "save_name": "名稱",
+                    "amount": "金額",
+                    "created_at": "建立時間"
+                }
+            )
+
+            st.dataframe(show_saving_df, use_container_width=True, hide_index=True)
+
+        st.divider()
+
         excel_file = build_excel_report(selected_month, trans_df, budget_df, goal)
 
         st.download_button(
             label="下載 Excel 財務報表",
             data=excel_file,
-            file_name=f"AI理財管家_{selected_month}_財務報表.xlsx",
+            file_name=f"理財管家_{selected_month}_財務報表.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
         )
